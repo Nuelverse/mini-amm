@@ -27,11 +27,12 @@ contract Handler is Test {
         amount = bound(amount, 1, 1000e18);
         MockERC20 tokenIn = aToB ? tokenA : tokenB;
 
-        uint256 k = miniAMM.reserveA() * miniAMM.reserveB();
+        uint256 k = tokenA.balanceOf(address(miniAMM)) * tokenB.balanceOf(address(miniAMM));
 
         miniAMM.swap(tokenIn, amount, 0);
 
-        uint256 kAfter = miniAMM.reserveA() * miniAMM.reserveB();
+        uint256 kAfter = tokenA.balanceOf(address(miniAMM)) * tokenB.balanceOf(address(miniAMM));
+
         if (kAfter < k) {
             problem = true;
         }

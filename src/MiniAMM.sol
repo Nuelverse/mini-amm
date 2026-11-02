@@ -102,6 +102,7 @@ contract MiniAMM is ERC20, ReentrancyGuard {
         if (tokenIn != (tokenA) && tokenIn != (tokenB)) {
             revert MiniAMM__TokenNotInPool();
         }
+        _syncReserves();
         uint256 reserveIn;
         uint256 reserveOut;
         IERC20 tokenOut;
@@ -171,40 +172,55 @@ contract MiniAMM is ERC20, ReentrancyGuard {
         if (amountADesired == 0 || amountBDesired == 0) {
             revert MiniAMM__ZeroAmountIn();
         }
+        _syncReserves(); // Sets the stored reserves to the real balances
         uint256 amountA;
         uint256 amountB;
+        bool firstDeposit = totalSupply() == 0;
 
-        if (totalSupply() == 0) {
+        if (firstDeposit) {
             // first deposit calculation
             amountA = amountADesired;
             amountB = amountBDesired;
-            shares = Math.sqrt(amountADesired * amountBDesired);
         } else {
             uint256 bNeeded = amountADesired * reserveB / reserveA; // the B that goes with A
             if (bNeeded <= amountBDesired) {
                 // calculate B needed for A
                 amountA = amountADesired;
                 amountB = bNeeded;
-                shares = (amountADesired * totalSupply()) / reserveA;
             } else {
-                uint256 aNeeded = (amountBDesired * reserveA) / reserveB; // the A that goes with B
-                amountA = aNeeded;
+                amountA = (amountBDesired * reserveA) / reserveB; // the A that goes with B
                 amountB = amountBDesired;
-                shares = (amountBDesired * totalSupply()) / reserveB;
             }
         }
-        if (shares == 0) {
-            revert MiniAMM__ZeroShare();
-        }
-        reserveA += amountA;
-        reserveB += amountB;
-        _mint(msg.sender, shares);
-        // False positive: the "external call" the linter sees is `Math.sqrt`, an internal library function.
-        // forge-lint: disable-next-line(reentrancy-events)
-        emit LiquidityAdded(msg.sender, shares, amountA, amountB);
+
+        uint256 aBalanceBefore = tokenA.balanceOf(address(this));
+        uint256 bBalanceBefore = tokenB.balanceOf(address(this));
 
         tokenA.safeTransferFrom(msg.sender, address(this), amountA);
         tokenB.safeTransferFrom(msg.sender, address(this), amountB);
+
+        uint256 aBalanceAfter = tokenA.balanceOf(address(this));
+        uint256 bBalanceAfter = tokenB.balanceOf(address(this));
+
+        uint256 receivedA = aBalanceAfter - aBalanceBefore;
+        uint256 receivedB = bBalanceAfter - bBalanceBefore;
+
+        if (firstDeposit) {
+            shares = Math.sqrt(receivedA * receivedB);
+        } else {
+            uint256 sharesFromA = (receivedA * totalSupply()) / reserveA;
+            uint256 sharesFromB = (receivedB * totalSupply()) / reserveB;
+            shares = Math.min(sharesFromA, sharesFromB);
+        }
+
+        if (shares == 0) {
+            revert MiniAMM__ZeroShare();
+        }
+        _syncReserves();
+        _mint(msg.sender, shares);
+        // `nonReentrant` stops re-entry; the pulls come first so the event can report what was received.
+        // forge-lint: disable-next-line(reentrancy-events)
+        emit LiquidityAdded(msg.sender, shares, receivedA, receivedB);
     }
 
     /**
@@ -222,8 +238,9 @@ contract MiniAMM is ERC20, ReentrancyGuard {
         if (totalSupply() == 0) {
             revert MiniAMM__NothingToBurn();
         }
-        amountA = (amountShares * tokenA.balanceOf(address(this))) / totalSupply();
-        amountB = (amountShares * tokenB.balanceOf(address(this))) / totalSupply();
+        _syncReserves();
+        amountA = (amountShares * reserveA) / totalSupply();
+        amountB = (amountShares * reserveB) / totalSupply();
 
         if (amountA == 0 || amountB == 0) {
             revert MiniAMM__ZeroAmountOut();
